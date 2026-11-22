@@ -1,1 +1,117 @@
+name: Build APK desde ZIP
 
+on:
+  push:
+    paths: ["*.zip"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRADLE_VERSION: "8.11.1"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Código
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Localizar y descomprimir el ZIP (plano o con carpeta raíz)
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          zips=(*.zip)
+          [ ${#zips[@]} -gt 0 ] || { echo "::error::No hay ningún .zip en la raíz del repositorio"; exit 1; }
+          best=""; bt=-1
+          for f in "${zips[@]}"; do
+            t=$(git log -1 --format=%ct -- "$f" 2>/dev/null || echo 0); t=${t:-0}
+            if [ "$t" -ge "$bt" ]; then bt=$t; best=$f; fi
+          done
+          echo "ZIP elegido: $best"
+          rm -rf _unzip project
+          mkdir _unzip
+          unzip -q -o "$best" -d _unzip
+          find _unzip -name '__MACOSX' -prune -exec rm -rf {} + || true
+          find _unzip -name '.DS_Store' -delete || true
+          # Raíz = carpeta más superficial que contiene settings.gradle
+          root=""
+          cand=$(find _unzip -maxdepth 4 \( -name settings.gradle -o -name settings.gradle.kts \) | awk '{print length, $0}' | sort -n | head -1 | cut -d' ' -f2-)
+          if [ -n "$cand" ]; then root=$(dirname "$cand"); fi
+          if [ -z "$root" ]; then
+            root=_unzip
+            while [ "$(find "$root" -mindepth 1 -maxdepth 1 | wc -l)" -eq 1 ] && [ -d "$(find "$root" -mindepth 1 -maxdepth 1)" ]; do
+              root=$(find "$root" -mindepth 1 -maxdepth 1)
+            done
+          fi
+          if [ "$root" = "_unzip" ]; then mv _unzip project; else mv "$root" project; fi
+          echo "Raíz del proyecto: ${root#_unzip}"
+          ls -la project
+
+      - name: Validar proyecto (archivos, sintaxis, dependencias públicas, prueba del motor)
+        shell: bash
+        run: |
+          [ -f project/tools/validate_project.py ] || { echo "::error::Falta tools/validate_project.py dentro del ZIP"; exit 1; }
+          python3 project/tools/validate_project.py project --red
+
+      - name: JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Plataforma 36
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Clave de firma (debug) para el APK release
+        shell: bash
+        run: |
+          mkdir -p ~/.android
+          [ -f ~/.android/debug.keystore ] || keytool -genkey -v -keystore ~/.android/debug.keystore \
+            -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
+            -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Gradle ${{ env.GRADLE_VERSION }}
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: Validar entorno (Java 17, Gradle, SDK 36, build-tools)
+        shell: bash
+        run: python3 project/tools/validate_project.py project --entorno
+
+      - name: Compilar APK release
+        run: gradle --no-daemon -p project assembleRelease
+
+      - name: Resumen del APK
+        shell: bash
+        run: |
+          {
+            echo "### APK generado"
+            echo '```'
+            ls -lh project/app/build/outputs/apk/release/*.apk
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Subir APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: simulador3d-release-apk
+          path: project/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 14
