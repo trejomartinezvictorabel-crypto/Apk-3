@@ -70,9 +70,11 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY'
-          import glob, os, subprocess, urllib.request, zipfile
+          import glob, os, shutil, subprocess, urllib.request, zipfile
 
           sdk_root = os.environ.get('ANDROID_SDK_ROOT') or os.environ.get('ANDROID_HOME') or '/usr/local/lib/android/sdk'
+          if not os.path.exists(sdk_root):
+              sdk_root = '/tmp/android-sdk'
           os.makedirs(sdk_root, exist_ok=True)
 
           lic_dir = os.path.join(sdk_root, 'licenses')
@@ -85,15 +87,25 @@ jobs:
           }
           for fname, content in licenses.items():
               fp = os.path.join(lic_dir, fname)
-              if not os.path.exists(fp):
-                  with open(fp, 'w', encoding='utf-8') as f:
-                      f.write(content)
+              try:
+                  if not os.path.exists(fp):
+                      with open(fp, 'w', encoding='utf-8') as f:
+                          f.write(content)
+              except PermissionError:
+                  pass
 
           managers = glob.glob(os.path.join(sdk_root, 'cmdline-tools/*/bin/sdkmanager'))
           if not managers:
+              sdk_root = '/tmp/android-sdk'
+              os.makedirs(sdk_root, exist_ok=True)
+              os.makedirs(os.path.join(sdk_root, 'licenses'), exist_ok=True)
+              for fname, content in licenses.items():
+                  with open(os.path.join(sdk_root, 'licenses', fname), 'w', encoding='utf-8') as f:
+                      f.write(content)
               zip_tmp = '/tmp/commandlinetools.zip'
-              url = 'https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip'
-              urllib.request.urlretrieve(url, zip_tmp)
+              if not os.path.exists(zip_tmp):
+                  url = 'https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip'
+                  urllib.request.urlretrieve(url, zip_tmp)
               cl_dir = os.path.join(sdk_root, 'cmdline-tools')
               os.makedirs(cl_dir, exist_ok=True)
               with zipfile.ZipFile(zip_tmp, 'r') as zf:
@@ -106,15 +118,20 @@ jobs:
 
           if managers:
               sm = sorted(managers)[-1]
-              os.chmod(sm, 0o755)
+              try:
+                  os.chmod(sm, 0o755)
+              except PermissionError:
+                  pass
               env = os.environ.copy()
               env['ANDROID_HOME'] = sdk_root
               env['ANDROID_SDK_ROOT'] = sdk_root
               subprocess.run(['bash', '-c', f'yes | "{sm}" --sdk_root="{sdk_root}" --licenses'], env=env, check=False)
               print(f'SDK preparado con {sm} en {sdk_root}')
+
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env_file:
+              env_file.write(f'ANDROID_HOME={sdk_root}\n')
+              env_file.write(f'ANDROID_SDK_ROOT={sdk_root}\n')
           PY
-          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
 
       - name: Plataforma 36
         shell: bash
