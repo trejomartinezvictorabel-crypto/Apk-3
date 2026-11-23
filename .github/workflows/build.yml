@@ -1,4 +1,4 @@
-name: Build APK desde ZIP - Android 16
+name: Build APK desde ZIP
 
 on:
   push:
@@ -25,30 +25,27 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Localizar, respaldar y descomprimir el ZIP (sin sobrescribir tu código)
+      - name: Localizar y descomprimir el ZIP (plano o con carpeta raíz)
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
           zips=(*.zip)
           [ ${#zips[@]} -gt 0 ] || { echo "::error::No hay ningún .zip en la raíz del repositorio"; exit 1; }
-
           best=""; bt=-1
           for f in "${zips[@]}"; do
             t=$(git log -1 --format=%ct -- "$f" 2>/dev/null || echo 0); t=${t:-0}
             if [ "$t" -ge "$bt" ]; then bt=$t; best=$f; fi
           done
           echo "ZIP elegido: $best"
-
-          rm -rf _unzip project /tmp/sim3d_backup
-          mkdir -p _unzip /tmp/sim3d_backup
+          rm -rf _unzip project
+          mkdir _unzip
           unzip -q -o "$best" -d _unzip
           find _unzip -name '__MACOSX' -prune -exec rm -rf {} + || true
           find _unzip -name '.DS_Store' -delete || true
-
-          # Detectar raíz del proyecto (Android nativo o Flutter)
+          # Raíz = carpeta más superficial que contiene settings.gradle
           root=""
-          cand=$(find _unzip -maxdepth 5 \( -name settings.gradle -o -name settings.gradle.kts -o -name pubspec.yaml \) | awk '{print length, $0}' | sort -n | head -1 | cut -d' ' -f2-)
+          cand=$(find _unzip -maxdepth 4 \( -name settings.gradle -o -name settings.gradle.kts \) | awk '{print length, $0}' | sort -n | head -1 | cut -d' ' -f2-)
           if [ -n "$cand" ]; then root=$(dirname "$cand"); fi
           if [ -z "$root" ]; then
             root=_unzip
@@ -56,120 +53,14 @@ jobs:
               root=$(find "$root" -mindepth 1 -maxdepth 1)
             done
           fi
-
           if [ "$root" = "_unzip" ]; then mv _unzip project; else mv "$root" project; fi
           echo "Raíz del proyecto: ${root#_unzip}"
-
-          # Respaldar carpetas clave (simulación 3D, src, res, assets, lib) para evitar pérdidas
-          for d in simulacion_3d app/src app/res src res assets lib; do
-            if [ -e "project/$d" ]; then
-              mkdir -p "/tmp/sim3d_backup/$(dirname "$d")"
-              cp -r "project/$d" "/tmp/sim3d_backup/$d"
-            fi
-          done
           ls -la project
 
-      - name: Validar y preparar compatibilidad Android 16 + firma válida
+      - name: Validar proyecto (archivos, sintaxis, dependencias públicas, prueba del motor)
         shell: bash
         run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import glob, os, re, shutil
-
-          proj = os.path.abspath('project')
-          os.makedirs(os.path.join(proj, 'tools'), exist_ok=True)
-          val_script = os.path.join(proj, 'tools', 'validate_project.py')
-
-          if not os.path.exists(val_script):
-              with open(val_script, 'w', encoding='utf-8') as f:
-                  f.write(
-                      "import os, sys\n"
-                      "print('Validador Android 16 activo. Argumentos:', sys.argv[1:])\n"
-                      "print('Proyecto en:', sys.argv[2] if len(sys.argv) > 2 else 'project')\n"
-                  )
-
-          # Restaurar respaldo si alguna carpeta clave faltara
-          backup = '/tmp/sim3d_backup'
-          if os.path.isdir(backup):
-              for root_b, dirs_b, files_b in os.walk(backup):
-                  for fn in files_b:
-                      src_f = os.path.join(root_b, fn)
-                      rel_f = os.path.relpath(src_f, backup)
-                      dst_f = os.path.join(proj, rel_f)
-                      if not os.path.exists(dst_f):
-                          os.makedirs(os.path.dirname(dst_f), exist_ok=True)
-                          shutil.copy2(src_f, dst_f)
-
-          # Actualizar Gradle Wrapper a 8.11.1 si existe
-          gw = os.path.join(proj, 'gradle/wrapper/gradle-wrapper.properties')
-          if os.path.exists(gw):
-              txt = open(gw, encoding='utf-8').read()
-              ntxt = re.sub(r'(?m)^distributionUrl=.*$', r'distributionUrl=https\://services.gradle.org/distributions/gradle-8.11.1-bin.zip', txt)
-              if ntxt != txt:
-                  open(gw, 'w', encoding='utf-8').write(ntxt)
-
-          # Actualizar AGP / Kotlin en settings.gradle y build.gradle
-          for rel in ('settings.gradle', 'settings.gradle.kts', 'build.gradle', 'build.gradle.kts'):
-              fp = os.path.join(proj, rel)
-              if os.path.exists(fp):
-                  t = open(fp, encoding='utf-8').read()
-                  nt = re.sub(r'(com\.android\.application["\']?\s*(?:version\s*["\']|:))\d+\.\d+\.\d+', r'\g<1>8.3.2', t)
-                  nt = re.sub(r'(com\.android\.tools\.build:gradle:)\d+\.\d+\.\d+', r'\g<1>8.3.2', nt)
-                  nt = re.sub(r'(org\.jetbrains\.kotlin\.android["\']?\s*(?:version\s*["\']|:))\d+\.\d+\.\d+', r'\g<1>2.1.0', nt)
-                  if nt != t:
-                      open(fp, 'w', encoding='utf-8').write(nt)
-
-          # Asegurar SDK 36 y signingConfig válido en release para evitar APK inválido al instalar
-          for rel in ('app/build.gradle', 'app/build.gradle.kts'):
-              fp = os.path.join(proj, rel)
-              if not os.path.exists(fp):
-                  continue
-              t = open(fp, encoding='utf-8').read()
-              kts = rel.endswith('.kts')
-              nt = re.sub(r'\bcompileSdk(?:Version)?\s*=?\s*\d+', 'compileSdk = 36' if kts else 'compileSdk 36', t)
-              nt = re.sub(r'\btargetSdk(?:Version)?\s*=?\s*\d+', 'targetSdk = 36' if kts else 'targetSdk 36', nt)
-              nt = re.sub(r'\bminSdk(?:Version)?\s*=?\s*\d+', 'minSdk = 24' if kts else 'minSdk 24', nt)
-
-              if not kts and 'signingConfigs' not in nt:
-                  ks_path = os.path.expanduser('~/.android/debug.keystore').replace('\\', '/')
-                  bloque = (
-                      "android {\n"
-                      "    signingConfigs {\n"
-                      "        release {\n"
-                      f"            storeFile file('{ks_path}')\n"
-                      "            storePassword 'android'\n"
-                      "            keyAlias 'androiddebugkey'\n"
-                      "            keyPassword 'android'\n"
-                      "        }\n"
-                      "    }\n"
-                      "    buildTypes {\n"
-                      "        release {\n"
-                      "            signingConfig signingConfigs.release\n"
-                      "        }\n"
-                      "    }\n"
-                  )
-                  nt = re.sub(r'^android\s*\{\s*\n', bloque, nt, count=1, flags=re.M)
-              elif not kts and 'buildTypes' in nt and 'release' in nt and 'signingConfig ' not in nt:
-                  ks_path = os.path.expanduser('~/.android/debug.keystore').replace('\\', '/')
-                  nt = re.sub(
-                      r'(buildTypes\s*\{\s*\n(?:\s*[^\n]*\n)*?\s*release\s*\{\s*\n)',
-                      r'\1            signingConfig signingConfigs.debug\n',
-                      nt,
-                      count=1,
-                  )
-
-              if nt != t:
-                  open(fp, 'w', encoding='utf-8').write(nt)
-
-          # Ajustes en AndroidManifest.xml para Android 16 sin borrar etiquetas existentes
-          for man in glob.glob(os.path.join(proj, '**/AndroidManifest.xml'), recursive=True):
-              t = open(man, encoding='utf-8').read()
-              nt = t
-              if 'enableOnBackInvokedCallback' not in nt and '<application' in nt:
-                  nt = re.sub(r'<application\b', '<application android:enableOnBackInvokedCallback="false"', nt, count=1)
-              if nt != t:
-                  open(man, 'w', encoding='utf-8').write(nt)
-          PY
+          [ -f project/tools/validate_project.py ] || { echo "::error::Falta tools/validate_project.py dentro del ZIP"; exit 1; }
           python3 project/tools/validate_project.py project --red
 
       - name: JDK 17
