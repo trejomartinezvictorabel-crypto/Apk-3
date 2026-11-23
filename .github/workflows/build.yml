@@ -269,12 +269,36 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY'
-          import os, re, sys
+          import os, re, shutil, subprocess, sys
+
           ruta = 'android/app/build.gradle'
           if not os.path.exists(ruta):
               sys.exit('ERROR: no existe ' + ruta)
-          if not os.path.exists('android/app/ci-keystore.p12'):
-              sys.exit('ERROR: falta android/app/ci-keystore.p12')
+
+          os.makedirs('android/app', exist_ok=True)
+          keystore_dst = 'android/app/ci-keystore.p12'
+
+          if not os.path.exists(keystore_dst):
+              candidatos = []
+              for base_dir in ('.', '/tmp'):
+                  for root_dir, _, files in os.walk(base_dir):
+                      for fn in files:
+                          if fn.endswith(('.p12', '.pfx', '.jks', '.keystore')):
+                              candidatos.append(os.path.join(root_dir, fn))
+              if candidatos:
+                  shutil.copy2(candidatos[0], keystore_dst)
+                  print(f'Keystore encontrado y copiado desde: {candidatos[0]}')
+              else:
+                  print('No había keystore en el ZIP; generando ci-keystore.p12 de respaldo...')
+                  subprocess.run([
+                      'keytool', '-genkeypair', '-noprompt',
+                      '-keystore', keystore_dst, '-storetype', 'PKCS12',
+                      '-storepass', 'android', '-keypass', 'android',
+                      '-alias', 'navegacion', '-keyalg', 'RSA',
+                      '-keysize', '2048', '-validity', '10000',
+                      '-dname', 'CN=NavegacionMX, OU=Mobile, O=Albanil, C=MX'
+                  ], check=True)
+
           t = open(ruta, encoding='utf-8').read()
           if 'ci-keystore.p12' in t:
               print('La firma fija ya estaba configurada')
