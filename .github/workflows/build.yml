@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android APK - Simulacion 3D
 
 on:
   push:
@@ -19,7 +19,7 @@ jobs:
           flutter-version: '3.27.0'
           cache: true
 
-      - name: 1. Crear pubspec.yaml y descargar modelo de Vosk automáticamente
+      - name: 1. Crear pubspec.yaml para Simulacion 3D y descargar modelo de Vosk
         run: |
           python3 -c "
           import os
@@ -34,8 +34,8 @@ jobs:
               os.system(f'curl -L \"https://alphacephei.com/vosk/models/vosk-model-small-es-0.42.zip\" -o {model_zip}')
               print('¡Modelo descargado y colocado en assets/models/ con éxito!')
 
-          pubspec_content = '''name: navegacion_offline_mx
-          description: Navegación multimodal offline para México.
+          pubspec_content = '''name: simulacion_3d
+          description: Aplicación móvil Simulación 3D.
           publish_to: \"none\"
           version: 1.0.0+1
 
@@ -76,8 +76,8 @@ jobs:
               f.write(pubspec_content)
           "
 
-      - name: 2. Generar plataforma Android base
-        run: flutter create . --org com.albanil.app --project-name navegacion_offline_mx --platforms=android
+      - name: 2. Generar plataforma Android base (Simulacion 3D)
+        run: flutter create . --org com.albanil.app --project-name simulacion_3d --platforms=android
       
       - name: 3. Parchear Gradle, Kotlin, SDK y Permisos con Python
         run: |
@@ -314,9 +314,9 @@ jobs:
                       'keytool', '-genkeypair', '-noprompt',
                       '-keystore', keystore_dst, '-storetype', 'PKCS12',
                       '-storepass', 'android', '-keypass', 'android',
-                      '-alias', 'navegacion', '-keyalg', 'RSA',
+                      '-alias', 'simulacion3d', '-keyalg', 'RSA',
                       '-keysize', '2048', '-validity', '10000',
-                      '-dname', 'CN=NavegacionMX, OU=Mobile, O=Albanil, C=MX'
+                      '-dname', 'CN=Simulacion3D, OU=Mobile, O=Albanil, C=MX'
                   ], check=True)
 
           t = open(ruta, encoding='utf-8').read()
@@ -329,7 +329,7 @@ jobs:
                   "        debug {\n"
                   "            storeFile file('ci-keystore.p12')\n"
                   "            storePassword 'android'\n"
-                  "            keyAlias 'navegacion'\n"
+                  "            keyAlias 'simulacion3d'\n"
                   "            keyPassword 'android'\n"
                   "            storeType 'pkcs12'\n"
                   "        }\n"
@@ -342,30 +342,46 @@ jobs:
               print('Firma fija agregada a build.gradle')
           PY
 
-      - name: 3d. Borrar nombre de navegador y unificar etiqueta de app con Python
+      - name: 3d. Renombrar app a Simulación 3D y limpiar nombres anteriores con Python
         shell: bash
         run: |
           python3 - <<'PY'
           import os, re
 
-          # Limpia nombres/etiquetas del navegador en manifiesto y recursos Android
+          # 1. Actualiza imports de paquete en archivos Dart de lib/ y test/
+          for folder in ('lib', 'test'):
+              if not os.path.exists(folder):
+                  continue
+              for root_dir, _, files in os.walk(folder):
+                  for fn in files:
+                      if fn.endswith('.dart'):
+                          fp = os.path.join(root_dir, fn)
+                          txt = open(fp, encoding='utf-8').read()
+                          new_txt = txt.replace('package:navegacion_offline_mx/', 'package:simulacion_3d/')
+                          new_txt = new_txt.replace('package:webscout_universal/', 'package:simulacion_3d/')
+                          if new_txt != txt:
+                              open(fp, 'w', encoding='utf-8').write(new_txt)
+                              print(f'Actualizado import de paquete en {fp}')
+
+          # 2. Limpia nombres anteriores y fija android:label="Simulación 3D" en AndroidManifest.xml
           manifest_path = 'android/app/src/main/AndroidManifest.xml'
           if os.path.exists(manifest_path):
               txt = open(manifest_path, encoding='utf-8').read()
-              cleaned = re.sub(r'webscout[_\-\s]*universal|webscout', 'navegacion_offline_mx', txt, flags=re.I)
-              if cleaned != txt:
-                  open(manifest_path, 'w', encoding='utf-8').write(cleaned)
-                  print('Limpiado nombre de navegador en AndroidManifest.xml')
+              txt = re.sub(r'navegacion[_\-\s]*offline[_\-\s]*mx|webscout[_\-\s]*universal|webscout', 'simulacion_3d', txt, flags=re.I)
+              txt = re.sub(r'android:label="[^"]*"', 'android:label="Simulación 3D"', txt)
+              open(manifest_path, 'w', encoding='utf-8').write(txt)
+              print('Actualizado android:label="Simulación 3D" en AndroidManifest.xml')
 
+          # 3. Limpia strings/recursos XML en res/
           for root_dir, _, files in os.walk('android/app/src/main/res'):
               for fn in files:
                   if fn.endswith('.xml'):
                       fp = os.path.join(root_dir, fn)
                       txt = open(fp, encoding='utf-8').read()
-                      cleaned = re.sub(r'webscout[_\-\s]*universal|webscout', 'navegacion_offline_mx', txt, flags=re.I)
+                      cleaned = re.sub(r'navegacion[_\-\s]*offline[_\-\s]*mx|webscout[_\-\s]*universal|webscout', 'Simulación 3D', txt, flags=re.I)
                       if cleaned != txt:
                           open(fp, 'w', encoding='utf-8').write(cleaned)
-                          print(f'Limpiado nombre de navegador en {fp}')
+                          print(f'Actualizado nombre en {fp}')
           PY
 
       - name: 4. Parchear namespace y manifiesto de vosk_flutter
@@ -473,7 +489,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: navegacion-offline-mx-apk
+          name: simulacion-3d-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
 
       - uses: actions/upload-artifact@v4
