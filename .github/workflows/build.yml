@@ -136,8 +136,25 @@ jobs:
       - name: Plataforma 36
         shell: bash
         run: |
-          yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses > /dev/null || true
-          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" "platforms;android-36" "build-tools;36.0.0"
+          python3 - <<'PY'
+          import glob, os, subprocess
+
+          sdk_root = os.environ.get('ANDROID_SDK_ROOT') or os.environ.get('ANDROID_HOME') or '/usr/local/lib/android/sdk'
+          managers = glob.glob(os.path.join(sdk_root, 'cmdline-tools/*/bin/sdkmanager')) + glob.glob('/tmp/android-sdk/cmdline-tools/*/bin/sdkmanager')
+          if not managers:
+              raise SystemExit('ERROR: No se encontró sdkmanager en el SDK.')
+
+          sm = sorted(managers)[-1]
+          env = os.environ.copy()
+          env['ANDROID_HOME'] = sdk_root
+          env['ANDROID_SDK_ROOT'] = sdk_root
+
+          subprocess.run(['bash', '-c', f'yes | "{sm}" --sdk_root="{sdk_root}" --licenses > /dev/null 2>&1 || true'], env=env, check=False)
+          res = subprocess.run([sm, f'--sdk_root={sdk_root}', 'platforms;android-36', 'build-tools;36.0.0'], env=env)
+          if res.returncode != 0:
+              print('Reintentando instalación de plataforma 36 y build-tools...')
+              subprocess.run([sm, f'--sdk_root={sdk_root}', 'platforms;android-36', 'build-tools;36.0.0'], env=env, check=True)
+          PY
 
       - name: Clave de firma para el APK release
         shell: bash
