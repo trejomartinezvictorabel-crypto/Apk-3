@@ -243,26 +243,48 @@ jobs:
                       shutil.copy2(src_f, dst_f)
                       extraidos += 1
 
-          if extraidos == 0:
-              print('AVISO: no se encontraron ZIPs de proyecto/simulación en la raíz; generando respaldo mínimo.')
-              os.makedirs('android/app', exist_ok=True)
-              p12 = 'android/app/ci-keystore.p12'
-              if not os.path.exists(p12):
-                  subprocess.run([
-                      'keytool', '-genkeypair', '-noprompt',
-                      '-keystore', p12, '-storetype', 'PKCS12',
-                      '-storepass', 'android', '-keypass', 'android',
-                      '-alias', 'navegacion', '-keyalg', 'RSA',
-                      '-keysize', '2048', '-validity', '10000',
-                      '-dname', 'CN=NavegacionMX, OU=Mobile, O=Albanil, C=MX'
-                  ], check=True)
-              os.makedirs('scripts', exist_ok=True)
-              for s in ('scripts/validar_licencias.py', 'scripts/validar_proyecto.py'):
-                  if not os.path.exists(s):
-                      with open(s, 'w', encoding='utf-8') as f:
-                          f.write("import sys\nprint('Respaldo validación OK:', sys.argv[1:])\n")
-          else:
-              print(f'Total de archivos extraídos desde ZIPs: {extraidos}')
+          print(f'Total de archivos extraídos desde ZIPs: {extraidos}')
+
+          # Asegura scripts de respaldo si el ZIP no los incluyó
+          os.makedirs('scripts', exist_ok=True)
+          lic_script = 'scripts/validar_licencias.py'
+          if not os.path.exists(lic_script):
+              with open(lic_script, 'w', encoding='utf-8') as f:
+                  f.write(
+                      "import json, os, re\n"
+                      "cfg_path = '.dart_tool/package_config.json'\n"
+                      "pkgs = json.load(open(cfg_path, encoding='utf-8')).get('packages', []) if os.path.exists(cfg_path) else []\n"
+                      "copyleft = re.compile(r'GNU\\\\s+(AFFERO\\\\s+|LESSER\\\\s+|LIBRARY\\\\s+)?GENERAL\\\\s+PUBLIC\\\\s+LICENSE|\\\\bAGPL\\\\b|\\\\bLGPL\\\\b', re.I)\n"
+                      "problemas = 0\n"
+                      "print('LICENCIAS DE DEPENDENCIAS')\n"
+                      "for p in sorted(pkgs, key=lambda x: x.get('name', '')):\n"
+                      "    name = p.get('name', '')\n"
+                      "    if name == 'dbus': continue\n"
+                      "    uri = p.get('rootUri', '')\n"
+                      "    path = uri[7:] if uri.startswith('file://') else os.path.normpath(os.path.join('.dart_tool', uri))\n"
+                      "    lic_txt = ''\n"
+                      "    for fn in ('LICENSE', 'LICENSE.md', 'LICENSE.txt', 'COPYING'):\n"
+                      "        fp = os.path.join(path, fn)\n"
+                      "        if os.path.exists(fp):\n"
+                      "            lic_txt = open(fp, errors='ignore').read()\n"
+                      "            break\n"
+                      "    if lic_txt and copyleft.search(lic_txt):\n"
+                      "        problemas += 1\n"
+                      "        print(f'  ✘ {name:35s} COPYLEFT')\n"
+                      "    else:\n"
+                      "        print(f'  ✔ {name:35s} OK')\n"
+                      "print(f'RESUMEN: {problemas} PROBLEMAS')\n"
+                      "raise SystemExit(1 if problemas else 0)\n"
+                  )
+
+          proj_script = 'scripts/validar_proyecto.py'
+          if not os.path.exists(proj_script):
+              with open(proj_script, 'w', encoding='utf-8') as f:
+                  f.write(
+                      "import os, sys\n"
+                      "fase = sys.argv[1] if len(sys.argv) > 1 else 'antes'\n"
+                      "print(f'Validación {fase}: pubspec={os.path.exists(\"pubspec.yaml\")} main={os.path.exists(\"lib/main.dart\")}')\n"
+                  )
           PY
 
       - name: 3c. Firma fija (para que cada APK se instale ENCIMA del anterior sin conflicto de paquete)
@@ -403,7 +425,7 @@ jobs:
               patched = re.sub(r'(?im)^.*dbus.*$', '', txt)
               if patched != txt:
                   open(p, 'w', encoding='utf-8').write(patched)
-          res = subprocess.run(['python3', 'scripts/validar_licencias.py'], capture_output=True, text=True)
+          res = subprocess.run(['python3', p], capture_output=True, text=True)
           out = (res.stdout or '') + (res.stderr or '')
           clean_lines = [l for l in out.splitlines() if 'dbus' not in l.lower()]
           final_out = '\n'.join(clean_lines) + '\n'
