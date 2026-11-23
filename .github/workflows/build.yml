@@ -218,7 +218,6 @@ jobs:
                           raise SystemExit('ERROR: ruta insegura dentro del zip: ' + n)
                   z.extractall(tmp_dir)
 
-              # Si el zip contiene una carpeta con simulacion_3d, la deja accesible en la raíz y en lib/
               for dirpath, dirnames, filenames in os.walk(tmp_dir):
                   for dname in dirnames:
                       if 'simulacion' in dname.lower() and ('3d' in dname.lower() or 'sim' in dname.lower()):
@@ -245,7 +244,6 @@ jobs:
 
           print(f'Total de archivos extraídos desde ZIPs: {extraidos}')
 
-          # Asegura scripts de respaldo si el ZIP no los incluyó
           os.makedirs('scripts', exist_ok=True)
           lic_script = 'scripts/validar_licencias.py'
           if not os.path.exists(lic_script):
@@ -342,6 +340,32 @@ jobs:
                   sys.exit('ERROR: no encontré el bloque android { en build.gradle')
               open(ruta, 'w', encoding='utf-8').write(nuevo)
               print('Firma fija agregada a build.gradle')
+          PY
+
+      - name: 3d. Borrar nombre de navegador y unificar etiqueta de app con Python
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, re
+
+          # Limpia nombres/etiquetas del navegador en manifiesto y recursos Android
+          manifest_path = 'android/app/src/main/AndroidManifest.xml'
+          if os.path.exists(manifest_path):
+              txt = open(manifest_path, encoding='utf-8').read()
+              cleaned = re.sub(r'webscout[_\-\s]*universal|webscout', 'navegacion_offline_mx', txt, flags=re.I)
+              if cleaned != txt:
+                  open(manifest_path, 'w', encoding='utf-8').write(cleaned)
+                  print('Limpiado nombre de navegador en AndroidManifest.xml')
+
+          for root_dir, _, files in os.walk('android/app/src/main/res'):
+              for fn in files:
+                  if fn.endswith('.xml'):
+                      fp = os.path.join(root_dir, fn)
+                      txt = open(fp, encoding='utf-8').read()
+                      cleaned = re.sub(r'webscout[_\-\s]*universal|webscout', 'navegacion_offline_mx', txt, flags=re.I)
+                      if cleaned != txt:
+                          open(fp, 'w', encoding='utf-8').write(cleaned)
+                          print(f'Limpiado nombre de navegador en {fp}')
           PY
 
       - name: 4. Parchear namespace y manifiesto de vosk_flutter
@@ -449,7 +473,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: app-navegacion-apk
+          name: navegacion-offline-mx-apk
           path: build/app/outputs/flutter-apk/app-debug.apk
 
       - uses: actions/upload-artifact@v4
