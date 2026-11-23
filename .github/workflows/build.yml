@@ -60,6 +60,48 @@ jobs:
           echo "Raíz del proyecto: ${root#_unzip}"
           ls -la project
 
+      - name: Agregar permisos al AndroidManifest con Python
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import glob, os, re
+
+          perms = [
+              '<uses-permission android:name="android.permission.INTERNET"/>',
+              '<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>',
+              '<uses-permission android:name="android.permission.CAMERA"/>',
+              '<uses-permission android:name="android.permission.RECORD_AUDIO"/>',
+              '<uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/>',
+              '<uses-permission android:name="android.permission.WAKE_LOCK"/>',
+              '<uses-permission android:name="android.permission.VIBRATE"/>',
+              '<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>',
+          ]
+
+          manifests = glob.glob('project/**/AndroidManifest.xml', recursive=True)
+          if not manifests:
+              print('Aviso: no se encontró AndroidManifest.xml en project/')
+
+          for mpath in manifests:
+              txt = open(mpath, encoding='utf-8').read()
+              faltantes = []
+              for p in perms:
+                  m_name = re.search(r'android:name="([^"]+)"', p)
+                  perm_name = m_name.group(1) if m_name else p
+                  if perm_name not in txt:
+                      faltantes.append('    ' + p)
+
+              if faltantes:
+                  bloque = '\n'.join(faltantes) + '\n'
+                  if '<application' in txt:
+                      txt = txt.replace('<application', bloque + '    <application', 1)
+                  elif '</manifest>' in txt:
+                      txt = txt.replace('</manifest>', bloque + '</manifest>', 1)
+                  open(mpath, 'w', encoding='utf-8').write(txt)
+                  print(f'Agregados {len(faltantes)} permisos a {mpath}')
+              else:
+                  print(f'Todos los permisos ya estaban presentes en {mpath}')
+          PY
+
       - name: JDK 17
         uses: actions/setup-java@v4
         with:
