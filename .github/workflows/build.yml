@@ -35,7 +35,7 @@ jobs:
 
           best=""; bt=-1
           for f in "${zips[@]}"; do
-            t=$(git log -1 --format=%ct -- "$f" 2>/dev/null \vert{}\vert{} echo 0); t=${t:-0}
+            t=$(git log -1 --format=%ct -- "$f" 2>/dev/null || echo 0); t=${t:-0}
             if [ "$t" -ge "$bt" ]; then bt=$t; best=$f; fi
           done
           echo "ZIP elegido: $best"
@@ -75,21 +75,20 @@ jobs:
           sdk_root = os.environ.get('ANDROID_SDK_ROOT') or os.environ.get('ANDROID_HOME') or '/usr/local/lib/android/sdk'
           os.makedirs(sdk_root, exist_ok=True)
 
-          # Asegura carpeta licenses con hashes estándar para evitar fallos en sdkmanager
           lic_dir = os.path.join(sdk_root, 'licenses')
           os.makedirs(lic_dir, exist_ok=True)
-          for fname, content in {
+          licenses = {
               'android-sdk-license': '24333f8a63b6825ea9c5514f83c2829b004d1fee\n84831b9409646a918e30573bab4c9c91346d8abd\n',
               'android-sdk-preview-license': '84831b9409646a918e30573bab4c9c91346d8abd\n',
               'android-googletv-license': '60108f7c06a1e840564b3b7198856d2250360a08\n',
               'mips-android-sys-image-license': 'e9acab5b5fbb560abb72ca8051a89f0c0f7604c8\n',
-          }.items():
+          }
+          for fname, content in licenses.items():
               fp = os.path.join(lic_dir, fname)
               if not os.path.exists(fp):
                   with open(fp, 'w', encoding='utf-8') as f:
                       f.write(content)
 
-          # Busca sdkmanager disponible
           managers = glob.glob(os.path.join(sdk_root, 'cmdline-tools/*/bin/sdkmanager'))
           if not managers:
               zip_tmp = '/tmp/commandlinetools.zip'
@@ -99,4 +98,60 @@ jobs:
               os.makedirs(cl_dir, exist_ok=True)
               with zipfile.ZipFile(zip_tmp, 'r') as zf:
                   zf.extractall(cl_dir)
-              extracted = os.path.join(cl
+              extracted = os.path.join(cl_dir, 'cmdline-tools')
+              latest_dir = os.path.join(cl_dir, 'latest')
+              if os.path.isdir(extracted) and not os.path.exists(latest_dir):
+                  os.rename(extracted, latest_dir)
+              managers = glob.glob(os.path.join(sdk_root, 'cmdline-tools/*/bin/sdkmanager'))
+
+          if managers:
+              sm = sorted(managers)[-1]
+              os.chmod(sm, 0o755)
+              env = os.environ.copy()
+              env['ANDROID_HOME'] = sdk_root
+              env['ANDROID_SDK_ROOT'] = sdk_root
+              subprocess.run(['bash', '-c', f'yes | "{sm}" --sdk_root="{sdk_root}" --licenses'], env=env, check=False)
+              print(f'SDK preparado con {sm} en {sdk_root}')
+          PY
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+
+      - name: Plataforma 36
+        shell: bash
+        run: |
+          yes | sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses > /dev/null || true
+          sdkmanager --sdk_root="$ANDROID_SDK_ROOT" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Clave de firma para el APK release
+        shell: bash
+        run: |
+          mkdir -p ~/.android
+          [ -f ~/.android/debug.keystore ] || keytool -genkey -v -keystore ~/.android/debug.keystore \
+            -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \
+            -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Gradle ${{ env.GRADLE_VERSION }}
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: Compilar APK release
+        run: gradle --no-daemon -p project assembleRelease
+
+      - name: Resumen del APK
+        shell: bash
+        run: |
+          {
+            echo "### APK generado"
+            echo '```'
+            ls -lh project/app/build/outputs/apk/release/*.apk
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Subir APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-release
+          path: project/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 14
